@@ -1,3 +1,5 @@
+import logging
+
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
@@ -200,5 +202,98 @@ class BunnyClient(object):
 
 
 class BunnyProvider(BaseProvider):
-    # TODO: implement things
-    pass
+    # Geo records are deprecated in favor of dynamic records, see:
+    # https://github.com/octodns/octodns/blob/main/docs/geo_records.md
+    SUPPORTS_GEO = False
+    # Bunny DNS geographic records are based on latitude/longitude, while
+    # octoDNS ones are based on country codes.
+    SUPPORTS_DYNAMIC = False
+    # Requires dynamic records.
+    SUPPORTS_POOL_VALUE_STATUS = False
+    # Requires dynamic records.
+    SUPPORTS_DYNAMIC_SUBNETS = False
+    # The same PTR record can return multiple values.
+    SUPPORTS_MULTIVALUE_PTR = True
+    # Customs root NS can be set in zone settings, but not by updating APEX NS
+    # records.
+    SUPPORTS_ROOT_NS = False
+    # Supported record types.
+    SUPPORTS = set(
+        ('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV', 'TXT')
+    )
+
+    def __init__(self, id, api_key, *args, **kwargs):
+        self.log = logging.getLogger(f'BunnyProvider[{id}]')
+        self.log.debug('__init__: id=%s, api_key=***', id)
+        super().__init__(id, *args, **kwargs)
+        self._client = BunnyClient(api_key)
+        # self._zone_records = {}
+
+    def _data_for_multiple(self, _type, records):
+        return {
+            'ttl': records[0]['Ttl'],
+            'type': _type,
+            'values': [r['Value'] for r in records],
+        }
+
+    _data_for_A = _data_for_multiple
+    _data_for_AAAA = _data_for_multiple
+    _data_for_TXT = _data_for_multiple
+
+    def _data_for_CAA(self, _type, records):
+        values = []
+        for record in records:
+            values.append(
+                {
+                    'flags': record['Flags'],
+                    'tag': record['Tag'],
+                    'Value': record['Value'],
+                }
+            )
+
+        return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
+
+    def _data_for_CNAME(self, _type, records):
+        record = records[0]
+        return {
+            'ttl': record['Ttl'],
+            'type': _type,
+            'value': f'{record["Value"]}.',
+        }
+
+    def _data_for_MX(self, _type, records):
+        values = []
+        for record in records:
+            values.append(
+                {
+                    'preference': record['Priority'],
+                    'exchange': (
+                        '.' if record["Value"] == '.' else f'{record["Value"]}.'
+                    ),
+                }
+            )
+
+        return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
+
+    def _data_for_NS(self, _type, records):
+        values = []
+        for record in records:
+            values.append(f'{record["Value"]}.')
+
+        return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
+
+    def _data_for_SRV(self, _type, records):
+        values = []
+        for record in records:
+            values.append(
+                {
+                    'port': record['Port'],
+                    'priority': record['Priority'],
+                    'target': (
+                        '.' if record["Value"] == '.' else f'{record["Value"]}.'
+                    ),
+                    'weight': record['Weight'],
+                }
+            )
+
+        return {'type': _type, 'ttl': records[0]['Ttl'], 'values': values}
