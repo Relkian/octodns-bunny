@@ -1,10 +1,12 @@
 import logging
+from collections import defaultdict
 
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
+from octodns.record import Record
 
 # TODO: remove __VERSION__ with the next major version release
 __version__ = __VERSION__ = '0.0.1'
@@ -123,12 +125,12 @@ class BunnyClient(object):
         if update:
             if record_data.get('Name') is not None:
                 raise BunnyClientException(
-                    'Existing record name can\'be' ' updated.'
+                    'Existing record name can\'be updated.'
                 )
 
             if raw_type is not None:
                 raise BunnyClientException(
-                    'Existing record type can\'be' ' updated.'
+                    'Existing record type can\'be updated.'
                 )
 
             record_data.pop('Name', None)
@@ -140,12 +142,11 @@ class BunnyClient(object):
                 raise BunnyClientException('No resource record type specified.')
 
             # Convert standard record types (A, AAAA,...) to Bunny DNS RR ID.
-            # type = [v for v in self.RECORD_TYPES.values() if v == raw_type]
             type = self.RECORD_TYPES.get(raw_type)
             # /!\ Record type ID for A id 0!
             if type is None:
                 raise BunnyClientException(
-                    'Unsupported resource record type:' f' {raw_type}'
+                    f'Unsupported resource record type: {raw_type}'
                 )
 
             record_data['Type'] = type
@@ -177,6 +178,26 @@ class BunnyClient(object):
         self._update_zones_cache(zone_name, r['Id'])
 
         return r
+
+    def zone_records(self, zone_name):
+        # Although not strictly necessary, zone_records() simplifies records
+        # management for BunnyProvider.
+        zone_id = self._get_zone_id(zone_name)
+        path = f'/dnszone/{zone_id}'
+
+        # Returns zone information, *including* DNS records.
+        r = self._request('GET', path).json()
+
+        records = []
+        for record in r['Records']:
+            # Convert Bunny DNS RR ID to standard record types (A, AAAA,...).
+            record['Type'] = [
+                k for (k, v) in self.RECORD_TYPES.items() if v == record['Type']
+            ][0]
+
+            records.append(record)
+
+        return records
 
     def record_create(self, zone_name, record_data):
         zone_id = self._get_zone_id(zone_name)
@@ -227,13 +248,13 @@ class BunnyProvider(BaseProvider):
         self.log.debug('__init__: id=%s, api_key=***', id)
         super().__init__(id, *args, **kwargs)
         self._client = BunnyClient(api_key)
-        # self._zone_records = {}
+        self._zone_records = {}
 
     def _data_for_multiple(self, _type, records):
         return {
             'ttl': records[0]['Ttl'],
             'type': _type,
-            'values': [r['Value'] for r in records],
+            'values': [r['Value'].replace(';', '\\;') for r in records],
         }
 
     _data_for_A = _data_for_multiple
@@ -264,13 +285,9 @@ class BunnyProvider(BaseProvider):
     def _data_for_MX(self, _type, records):
         values = []
         for record in records:
+            exchange = '.' if record["Value"] == '.' else f'{record["Value"]}.'
             values.append(
-                {
-                    'preference': record['Priority'],
-                    'exchange': (
-                        '.' if record["Value"] == '.' else f'{record["Value"]}.'
-                    ),
-                }
+                {'preference': record['Priority'], 'exchange': exchange}
             )
 
         return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
@@ -285,15 +302,168 @@ class BunnyProvider(BaseProvider):
     def _data_for_SRV(self, _type, records):
         values = []
         for record in records:
+            target = '.' if record["Value"] == '.' else f'{record["Value"]}.'
             values.append(
                 {
                     'port': record['Port'],
                     'priority': record['Priority'],
-                    'target': (
-                        '.' if record["Value"] == '.' else f'{record["Value"]}.'
-                    ),
+                    'target': target,
                     'weight': record['Weight'],
                 }
             )
 
         return {'type': _type, 'ttl': records[0]['Ttl'], 'values': values}
+
+    def zone_records(self, zone):
+        if zone.name not in self._zone_records:
+            try:
+                self._zone_records[zone.name] = self._client.zone_records(
+                    zone.name[:-1]
+                )
+            except BunnyClientNotFound:
+                return []
+
+        return self._zone_records[zone.name]
+
+    def list_zones(self):
+        self.log.debug('list_zones:')
+        domains = [f'{d["name"]}.' for d in self._client.zones()]
+
+        return sorted(domains)
+
+    def populate(self, zone, target=False, lenient=False):
+        self.log.debug(
+            'populate: name=%s, target=%s, lenient=%s',
+            zone.name,
+            target,
+            lenient,
+        )
+
+        values = defaultdict(lambda: defaultdict(list))
+        for record in self.zone_records(zone):
+            _type = record['Type']
+
+            if _type not in self.SUPPORTS:
+                self.log.warning(
+                    'populate: skipping unsupported %s record', _type
+                )
+                continue
+
+            values[record['Name']][record['Type']].append(record)
+
+        before = len(zone.records)
+        for name, types in values.items():
+            for _type, records in types.items():
+                data_for = getattr(self, f'_data_for_{_type}')
+                record = Record.new(
+                    zone,
+                    name,
+                    data_for(_type, records),
+                    source=self,
+                    lenient=lenient,
+                )
+                zone.add_record(record, lenient=lenient)
+
+        exists = zone.name in self._zone_records
+        self.log.info(
+            'populate:   found %s records, exists=%s',
+            len(zone.records) - before,
+            exists,
+        )
+
+        return exists
+
+    def _params_for_multiple(self, record):
+        for value in record.values:
+            yield {
+                'Value': value.replace('\\;', ';'),
+                'Name': record.name,
+                'Ttl': record.ttl,
+                'Type': record._type,
+            }
+
+    _params_for_A = _params_for_multiple
+    _params_for_AAAA = _params_for_multiple
+    _params_for_TXT = _params_for_multiple
+    _params_for_NS = _params_for_multiple
+
+    def _params_for_CAA(self, record):
+        for value in record.values:
+            yield {
+                'Value': value.value,
+                'Flags': value.flags,
+                'Name': record.name,
+                'Tag': value.tag,
+                'Ttl': record.ttl,
+                'Type': record._type,
+            }
+
+    def _params_for_CNAME(self, record):
+        yield {
+            'Value': record.value,
+            'Name': record.name,
+            'Ttl': record.ttl,
+            'Type': record._type,
+        }
+
+    def _params_for_MX(self, record):
+        for value in record.values:
+            yield {
+                'Value': value.exchange,
+                'Name': record.name,
+                'Priority': value.preference,
+                'Ttl': record.ttl,
+                'Type': record._type,
+            }
+
+    def _params_for_SRV(self, record):
+        for value in record.values:
+            yield {
+                'Value': value.target,
+                'Name': record.name,
+                'Port': value.port,
+                'Priority': value.priority,
+                'Ttl': record.ttl,
+                'Type': record._type,
+                'Weight': value.weight,
+            }
+
+    def _apply_Create(self, change):
+        new = change.new
+        params_for = getattr(self, f'_params_for_{new._type}')
+        for params in params_for(new):
+            self._client.record_create(new.zone.name[:-1], params)
+
+    def _apply_Update(self, change):
+        self._apply_Delete(change)
+        self._apply_Create(change)
+
+    def _apply_Delete(self, change):
+        existing = change.existing
+        zone = existing.zone
+        for record in self.zone_records(zone):
+            if (
+                existing.name == record['Name']
+                and existing._type == record['Type']
+            ):
+                self._client.record_delete(zone.name[:-1], record['Id'])
+
+    def _apply(self, plan):
+        desired = plan.desired
+        changes = plan.changes
+        self.log.debug(
+            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+        )
+        domain_name = desired.name[:-1]
+        try:
+            self._client.zone(domain_name)
+        except BunnyClientNotFound:
+            self.log.debug('_apply:   no matching zone, creating domain')
+            self._client.zone_create(domain_name)
+
+        for change in changes:
+            class_name = change.__class__.__name__
+            getattr(self, f'_apply_{class_name}')(change)
+
+        # Clear out the cache if any
+        self._zone_records.pop(desired.name, None)
