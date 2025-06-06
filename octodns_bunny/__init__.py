@@ -52,6 +52,7 @@ class BunnyClient(object):
         #'SCR': 11,
         'NS': 12,
     }
+    DEFAULT_NS = ['kiki.bunny.net', 'coco.bunny.net']
 
     def __init__(self, api_key):
         sess = Session()
@@ -179,6 +180,12 @@ class BunnyClient(object):
 
         return r
 
+    def zone_update(self, zone_name, zone_data):
+        zone_id = self._get_zone_id(zone_name)
+        path = f'/dnszone/{zone_id}'
+
+        return self._request('POST', path, data=zone_data)
+
     def zone_records(self, zone_name):
         # Although not strictly necessary, zone_records() simplifies records
         # management for BunnyProvider.
@@ -187,6 +194,31 @@ class BunnyClient(object):
 
         # Returns zone information, *including* DNS records.
         r = self._request('GET', path).json()
+
+        # Custom (white-label only) NS records for APEX must handled through
+        # zone settings.
+        apex_ns = []
+        if r.get('CustomNameserversEnabled'):
+            for setting_name in ['Nameserver1', 'Nameserver2']:
+                ns = r.get(setting_name)
+                if not ns:
+                    continue
+
+                # Sometimes NS value ends with a dot, sometimes not. Bunny
+                # doesn't enforce that so we normalize it here.
+                apex_ns.append(ns[:-1] if ns[-1:] == '.' else ns)
+
+        for i, current_ns in enumerate(apex_ns or self.DEFAULT_NS, 1):
+            record = {
+                'Id': i,
+                'Type': 12,
+                'Ttl': 172800,
+                'Value': current_ns,
+                'Name': '',
+            }
+            # We insert the NS record at the top of the list in order to keep
+            # r['Records'].insert(0, record)
+            r['Records'].append(record)
 
         records = []
         for record in r['Records']:
@@ -198,6 +230,30 @@ class BunnyClient(object):
             records.append(record)
 
         return records
+
+    def zone_ns_add(self, zone_name, ns_id, ns_value):
+        if ns_id not in [1, 2]:
+            raise BunnyClientException(
+                f'Invalid NS ID "{ns_id}" for root NS.' ' Must be "1" or "2".'
+            )
+
+        data = {
+            'CustomNameserversEnabled': True,
+            f'Nameserver{ns_id}': ns_value,
+        }
+        return self.zone_update(zone_name, data)
+
+    def zone_ns_del(self, zone_name, ns_id):
+        if ns_id not in [1, 2]:
+            raise BunnyClientException(
+                f'Invalid NS ID "{ns_id}" for root NS.' ' Must be "1" or "2".'
+            )
+
+        data = {
+            'CustomNameserversEnabled': False,
+            f'Nameserver{ns_id}': self.DEFAULT_NS[ns_id - 1],
+        }
+        return self.zone_update(zone_name, data)
 
     def record_create(self, zone_name, record_data):
         zone_id = self._get_zone_id(zone_name)
@@ -237,18 +293,19 @@ class BunnyProvider(BaseProvider):
     SUPPORTS_MULTIVALUE_PTR = True
     # Customs root NS can be set in zone settings, but not by updating APEX NS
     # records.
-    SUPPORTS_ROOT_NS = False
+    SUPPORTS_ROOT_NS = True
     # Supported record types.
     SUPPORTS = set(
         ('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV', 'TXT')
     )
 
-    def __init__(self, id, api_key, *args, **kwargs):
+    def __init__(self, id, api_key, custom_ns=None, *args, **kwargs):
         self.log = logging.getLogger(f'BunnyProvider[{id}]')
         self.log.debug('__init__: id=%s, api_key=***', id)
         super().__init__(id, *args, **kwargs)
         self._client = BunnyClient(api_key)
         self._zone_records = {}
+        self.custom_ns = custom_ns
 
     def _data_for_multiple(self, _type, records):
         return {
@@ -293,11 +350,18 @@ class BunnyProvider(BaseProvider):
         return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
 
     def _data_for_NS(self, _type, records):
+        ids = []
         values = []
         for record in records:
+            ids.append(record["Id"])
             values.append(f'{record["Value"]}.')
 
-        return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
+        return {
+            'id': ids,
+            'ttl': records[0]['Ttl'],
+            'type': _type,
+            'values': values,
+        }
 
     def _data_for_SRV(self, _type, records):
         values = []
@@ -385,7 +449,6 @@ class BunnyProvider(BaseProvider):
     _params_for_A = _params_for_multiple
     _params_for_AAAA = _params_for_multiple
     _params_for_TXT = _params_for_multiple
-    _params_for_NS = _params_for_multiple
 
     def _params_for_CAA(self, record):
         for value in record.values:
@@ -416,6 +479,16 @@ class BunnyProvider(BaseProvider):
                 'Type': record._type,
             }
 
+    def _params_for_NS(self, record):
+        for value in record.values:
+            yield {
+                'Id': value.id,
+                'Value': value,
+                'Name': record.name,
+                'Ttl': record.ttl,
+                'Type': record._type,
+            }
+
     def _params_for_SRV(self, record):
         for value in record.values:
             yield {
@@ -432,6 +505,11 @@ class BunnyProvider(BaseProvider):
         new = change.new
         params_for = getattr(self, f'_params_for_{new._type}')
         for params in params_for(new):
+            # Special call for APEX NS.
+            if new._type == 'NS' and new.name == '':
+                self._client.zone_ns_add(new.zone.name[:-1], new.id, new.value)
+                continue
+
             self._client.record_create(new.zone.name[:-1], params)
 
     def _apply_Update(self, change):
@@ -446,6 +524,13 @@ class BunnyProvider(BaseProvider):
                 existing.name == record['Name']
                 and existing._type == record['Type']
             ):
+                # Special call for APEX NS.
+                if existing._type == 'NS' and existing.name == '':
+                    self._client.zone_ns_del(
+                        existing.zone.name[:-1], record['Id']
+                    )
+                    continue
+
                 self._client.record_delete(zone.name[:-1], record['Id'])
 
     def _apply(self, plan):
