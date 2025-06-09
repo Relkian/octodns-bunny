@@ -118,38 +118,9 @@ class BunnyClient(object):
 
         return True
 
-    def _handle_record_data(self, record_data, update=False):
-        raw_type = record_data.get('Type')
-
-        # Record type and name can't be updated.
-        if update:
-            if record_data.get('Name') is not None:
-                raise BunnyClientException(
-                    'Existing record name can\'be updated.'
-                )
-
-            if raw_type is not None:
-                raise BunnyClientException(
-                    'Existing record type can\'be updated.'
-                )
-
-            record_data.pop('Name', None)
-            record_data.pop('Type', None)
-
-        else:
-            # RR "Type" field is required for record creation.
-            if not raw_type:
-                raise BunnyClientException('No resource record type specified.')
-
-            # Convert standard record types (A, AAAA,...) to Bunny DNS RR ID.
-            type = self.RECORD_TYPES.get(raw_type)
-            # /!\ Record type ID for A id 0!
-            if type is None:
-                raise BunnyClientException(
-                    f'Unsupported resource record type: {raw_type}'
-                )
-
-            record_data['Type'] = type
+    def _handle_record_data(self, record_data):
+        # Convert standard record types (A, AAAA,...) to Bunny DNS RR ID.
+        record_data['Type'] = self.RECORD_TYPES[record_data['Type']]
 
         return record_data
 
