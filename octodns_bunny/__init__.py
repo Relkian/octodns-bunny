@@ -299,6 +299,8 @@ class BunnyProvider(BaseProvider):
 
         return {'ttl': records[0]['Ttl'], 'type': _type, 'values': values}
 
+    _data_for_PTR = _data_for_NS
+
     def _data_for_SRV(self, _type, records):
         values = []
         for record in records:
@@ -386,6 +388,7 @@ class BunnyProvider(BaseProvider):
     _params_for_AAAA = _params_for_multiple
     _params_for_TXT = _params_for_multiple
     _params_for_NS = _params_for_multiple
+    _params_for_PTR = _params_for_multiple
 
     def _params_for_CAA(self, record):
         for value in record.values:
