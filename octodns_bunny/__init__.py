@@ -287,9 +287,8 @@ class BunnyProvider(BaseProvider):
 
     def list_zones(self):
         self.log.debug('list_zones:')
-        domains = [f'{d["name"]}.' for d in self._client.zones()]
 
-        return sorted(domains)
+        return sorted([f'{d}.' for d in self._client.zones()])
 
     def populate(self, zone, target=False, lenient=False):
         self.log.debug(
