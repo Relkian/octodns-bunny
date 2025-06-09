@@ -171,7 +171,7 @@ class BunnyClient(object):
 
         record_data = self._handle_record_data(record_data)
 
-        return self._request('PUT', path, data=record_data).json()
+        return self._request('PUT', path, data=record_data)
 
     def record_delete(self, zone_name, record_id):
         zone_id = self._get_zone_id(zone_name)
