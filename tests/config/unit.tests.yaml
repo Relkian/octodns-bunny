@@ -1,0 +1,57 @@
+---
+? ''
+: - ttl: 0
+    type: A
+    value: 127.0.0.11
+  - ttl: 0
+    type: AAAA
+    value: ::23
+  - ttl: 300
+    type: CAA
+    values:
+    - flags: 123
+      tag: issue
+      value: example-ca.com
+    - flags: 128
+      tag: issuewild
+      value: digicert.com
+  - ttl: 300
+    type: MX
+    value:
+      exchange: .
+      preference: 10
+  - ttl: 300
+    type: TXT
+    value: v=spf1 -all
+7.8.9.1:
+  ttl: 300
+  type: PTR
+  values:
+  - test.com.
+  - test2.com.
+_sip._tcp:
+  ttl: 300
+  type: SRV
+  value:
+    port: 5060
+    priority: 100
+    target: sip.example.com.
+    weight: 100
+hop:
+  ttl: 300
+  type: A
+  value: 127.0.0.23
+submail:
+  ttl: 300
+  type: MX
+  value:
+    exchange: mail.exaple.com.
+    preference: 10
+subtest:
+  ttl: 300
+  type: CNAME
+  value: example.com.
+subzone:
+  ttl: 300
+  type: NS
+  value: ns1.example.com.
