@@ -157,9 +157,15 @@ class BunnyClient(object):
         records = []
         for record in r['Records']:
             # Convert Bunny DNS RR ID to standard record types (A, AAAA,...).
-            record['Type'] = [
-                k for (k, v) in self.RECORD_TYPES.items() if v == record['Type']
-            ][0]
+            try:
+                record['Type'] = [
+                    k
+                    for (k, v) in self.RECORD_TYPES.items()
+                    if v == record['Type']
+                ][0]
+            except IndexError:
+                # Unknown record type will be skipped by populate().
+                pass
 
             records.append(record)
 
