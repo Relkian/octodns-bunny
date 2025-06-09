@@ -153,11 +153,6 @@ class BunnyClient(object):
 
         return record_data
 
-    def clear_zones_cache(self):
-        self._zones = {}
-
-        return True
-
     def zones(self):
         if not self._zones:
             self._cache_zones()
@@ -206,14 +201,6 @@ class BunnyClient(object):
         record_data = self._handle_record_data(record_data)
 
         return self._request('PUT', path, data=record_data).json()
-
-    def record_update(self, zone_name, record_id, record_data):
-        zone_id = self._get_zone_id(zone_name)
-        path = f'/dnszone/{zone_id}/records/{record_id}'
-
-        record_data = self._handle_record_data(record_data, update=True)
-
-        return self._request('POST', path, data=record_data)
 
     def record_delete(self, zone_name, record_id):
         zone_id = self._get_zone_id(zone_name)
