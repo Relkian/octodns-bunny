@@ -268,7 +268,7 @@ class BunnyProvider(BaseProvider):
                 {
                     'flags': record['Flags'],
                     'tag': record['Tag'],
-                    'Value': record['Value'],
+                    'value': record['Value'],
                 }
             )
 
