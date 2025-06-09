@@ -1,5 +1,6 @@
 name: octoDNS BunnyProvider
 on:
+  push:
   pull_request:
   workflow_dispatch:
 
