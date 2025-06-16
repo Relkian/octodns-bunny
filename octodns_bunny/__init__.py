@@ -175,6 +175,7 @@ class BunnyClient(object):
         zone_id = self._get_zone_id(zone_name)
         path = f'/dnszone/{zone_id}/records'
 
+        print(f'{zone_name}: {record_data}')
         record_data = self._handle_record_data(record_data)
 
         return self._request('PUT', path, data=record_data)
