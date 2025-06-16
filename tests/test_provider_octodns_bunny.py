@@ -17,8 +17,6 @@ from octodns_bunny import (
 
 
 class TestBunnyProvider(TestCase):
-    API_ROOT = 'https://api.bunny.net'
-
     expected = Zone('unit.tests.', [])
     source = YamlProvider('test', join(dirname(__file__), 'config'))
     source.populate(expected)
