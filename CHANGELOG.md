@@ -1,11 +1,3 @@
-## TODO: v0.0.1 - 20??-??-?? - Moving
+## v1.0.0 - 2025-06-17 - Initial release
 
-#### Nothworthy Changes
-
-* Initial extraction of BunnyProvider from octoDNS core
-
-TODO: anything else
-
-#### Stuff
-
-TODO: anything else
+* Initial release of BunnyProvider

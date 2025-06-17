@@ -22,8 +22,7 @@ grep -r -I --line-number "# pragma: +no.*cover" $SOURCE_DIR && {
   exit 1
 }
 
-# TODO: ensure any common env var secrets have been cleared
-export TODO_ACCESS_KEY_ID=
+export BUNNY_API_KEY=
 
 pytest \
   --disable-network \
