@@ -21,4 +21,4 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
       - name: Changelog Check
         run: |
-          ./script/changelog-template check
+          ./script/changelog check
